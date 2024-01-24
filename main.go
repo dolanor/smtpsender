@@ -2,7 +2,7 @@ package main
 
 import (
 	"crypto/tls"
-	"flag"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -12,14 +12,15 @@ import (
 	"time"
 
 	"github.com/peterbourgon/ff/v4"
+	"github.com/peterbourgon/ff/v4/ffhelp"
 )
 
 type Config struct {
 	Port string
 
-	SMTPServer   string
-	SMTPEmail    string
-	SMTPPassword string
+	SMTPServer      string
+	SMTPSenderEmail string
+	SMTPPassword    string
 
 	DestEmail string
 }
@@ -27,20 +28,25 @@ type Config struct {
 func config() (Config, error) {
 	cfg := Config{}
 
-	fs := flag.NewFlagSet("smtpsender", flag.ExitOnError)
+	fs := ff.NewFlagSet("smtpsender")
 
-	fs.StringVar(&cfg.Port, "port", "12345", "the TCP port the server listens on")
-	fs.StringVar(&cfg.SMTPEmail, "smtp-email", "", "")
-	fs.StringVar(&cfg.SMTPServer, "smtp-server", "", "")
-	fs.StringVar(&cfg.SMTPPassword, "smtp-password", "", "")
-	fs.StringVar(&cfg.DestEmail, "dest-email", "", "")
+	fs.StringVar(&cfg.Port, 'p', "port", "12345", "the TCP port the server listens on")
+	fs.StringVar(&cfg.SMTPSenderEmail, 'e', "smtp-sender-email", "", "")
+	fs.StringVar(&cfg.SMTPServer, 's', "smtp-server", "", "")
+	fs.StringVar(&cfg.SMTPPassword, 0, "smtp-password", "", "")
+	fs.StringVar(&cfg.DestEmail, 'd', "dest-email", "", "")
 
 	err := ff.Parse(fs,
 		os.Args[1:],
-		ff.WithEnvVars(),
+		ff.WithEnvVarPrefix("SMTPSENDER"),
 	)
-	if err != nil {
-		return cfg, err
+	switch {
+	case errors.Is(err, ff.ErrHelp):
+		fmt.Fprintf(os.Stderr, "%s\n", ffhelp.Flags(fs))
+		os.Exit(0)
+	case err != nil:
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
 	}
 
 	return cfg, nil
@@ -52,7 +58,7 @@ func main() {
 		panic(err)
 	}
 
-	l, err := net.Listen("tcp", ":12345")
+	l, err := net.Listen("tcp", fmt.Sprintf(":%s", cfg.Port))
 	if err != nil {
 		panic(err)
 	}
@@ -74,10 +80,10 @@ func main() {
 			}
 			log.Println("read:", string(data))
 
-			auth := smtp.PlainAuth("", cfg.SMTPEmail, cfg.SMTPPassword, cfg.SMTPServer)
+			auth := smtp.PlainAuth("", cfg.SMTPSenderEmail, cfg.SMTPPassword, cfg.SMTPServer)
 
 			headers := make(map[string]string)
-			headers["From"] = cfg.SMTPEmail
+			headers["From"] = cfg.SMTPSenderEmail
 			headers["To"] = cfg.DestEmail
 			headers["Subject"] = "Notification"
 			headers["Date"] = time.Now().Format(time.RFC3339)
@@ -107,7 +113,7 @@ func main() {
 				log.Println("smtp client auth:", err)
 			}
 
-			err = c.Mail(cfg.SMTPEmail)
+			err = c.Mail(cfg.SMTPSenderEmail)
 			if err != nil {
 				log.Println("smtp client mail:", err)
 			}
